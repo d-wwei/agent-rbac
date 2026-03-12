@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ConfigLoader, PermissionConfig } from '../types.js';
 import { DEFAULT_CONFIG } from './defaults.js';
-import { validateConfig } from './schema.js';
+import { validateConfig, validateConfigSemantics } from './schema.js';
 
 // ── File-based loader ────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ export class FileConfigLoader implements ConfigLoader {
     let raw = '';
     try {
       raw = fs.readFileSync(this.configPath, 'utf-8');
-      return validateConfig(JSON.parse(raw));
+      return validateConfigSemantics(validateConfig(JSON.parse(raw)));
     } catch {
       return this.recoverOwner(raw);
     }

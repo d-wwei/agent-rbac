@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { EnforcementPipeline } from '../enforcement/pipeline.js';
 import { InMemoryConfigLoader } from '../config/loader.js';
 import { RateLimiter } from '../core/rate-limiter.js';
+import { FileSystemMemoryStore } from '../memory/memory-store.js';
 import type { PermissionConfig, RbacAdapter } from '../types.js';
 
 const testConfig: PermissionConfig = {
@@ -23,6 +27,8 @@ const testConfig: PermissionConfig = {
         'bridge.mode.plan',
         'bridge.session.list',
         'agent.file.read',
+        'info.own.memory.read',
+        'info.own.memory.write',
       ],
       deny: [],
       rateLimit: 60,
@@ -138,6 +144,17 @@ describe('EnforcementPipeline', () => {
       command: '/help',
     });
     expect(result.allowed).toBe(true);
+  });
+
+  it('Layer 2: blocks unknown commands in strict mode', () => {
+    const pipeline = createPipeline();
+    const result = pipeline.enforce({
+      userId: 'unknown_guest',
+      message: '/mystery',
+      command: '/mystery',
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe('command_filter.unknown');
   });
 
   it('Layer 2: handles /mode with args', () => {
@@ -268,6 +285,7 @@ describe('EnforcementPipeline', () => {
     expect(result.enforcedMode).toBe('ask');
     expect(result.context?.injectedPrompt).toBeDefined();
     expect(result.context?.userRole).toBe('guest');
+    expect(result.trace?.evaluatedLayers).toContain('gateway');
   });
 
   it('full pipeline: admin has full access', () => {
@@ -321,5 +339,31 @@ describe('EnforcementPipeline', () => {
     const user = pipeline.resolveUser('user_member');
     expect(user.name).toBe('Alice');
     expect(user.topRole).toBe('member');
+  });
+
+  it('enforceAsync loads scoped memory for non-owner sessions', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-rbac-pipeline-'));
+    const store = new FileSystemMemoryStore(tmpDir);
+    await store.write('__public__', 'guidelines', 'shared rules');
+    await store.write('user_member', 'memory', 'alice memory');
+
+    const pipeline = new EnforcementPipeline({
+      configLoader: new InMemoryConfigLoader(testConfig),
+      rateLimiter: new RateLimiter({ windowMs: 3600_000 }),
+      contextLoaderOpts: { memoryStore: store },
+    });
+
+    const result = await pipeline.enforceAsync({
+      userId: 'user_member',
+      message: 'hello',
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.context?.loadedMemory).toEqual({
+      public: { guidelines: 'shared rules' },
+      user: { memory: 'alice memory' },
+    });
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

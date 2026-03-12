@@ -114,6 +114,7 @@ describe('ToolInterceptor', () => {
     });
     expect(result.allowed).toBe(false);
     expect(result.requiredPermission).toBe('info.agent.config.read');
+    expect(result.normalizedPaths).toContain(path.resolve(`${home}/.agent/permissions.json`));
   });
 
   it('allows owner to access any protected path', () => {
@@ -170,6 +171,18 @@ describe('ToolInterceptor', () => {
       args: { file_path: `${home}/.agent/memory/daily/today.md` },
     });
     expect(result.allowed).toBe(false);
+  });
+
+  it('normalizes relative paths before matching protected rules', () => {
+    const interceptor = new ToolInterceptor(config);
+    const user = resolveUser(config, 'user_m');
+    const relative = path.join(home, '.agent', 'folder', '..', 'permissions.json');
+    const result = interceptor.check(user, {
+      toolName: 'Read',
+      filePaths: [relative],
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.requiredPermission).toBe('info.agent.config.read');
   });
 
   it('works without protectedPaths config', () => {

@@ -14,13 +14,24 @@ export class UserMemoryManager {
   // ── Access control ─────────────────────────────────────────────
 
   /**
-   * Check if the requesting user can access target user's memory.
-   * Owner can access anyone's memory. Non-owner can only access their own.
+   * Backward-compatible read access check.
    */
   canAccess(requester: UserPermissions, targetUserId: string): boolean {
-    if (requester.userId === targetUserId) return true;
-    if (hasPermission(requester, 'info.others.memory.read')) return true;
-    return false;
+    return this.canRead(requester, targetUserId);
+  }
+
+  canRead(requester: UserPermissions, targetUserId: string): boolean {
+    if (requester.userId === targetUserId) {
+      return hasPermission(requester, 'info.own.memory.read');
+    }
+    return hasPermission(requester, 'info.others.memory.read');
+  }
+
+  canWrite(requester: UserPermissions, targetUserId: string): boolean {
+    if (requester.userId === targetUserId) {
+      return hasPermission(requester, 'info.own.memory.write');
+    }
+    return hasPermission(requester, 'info.others.memory.write');
   }
 
   // ── Profile ────────────────────────────────────────────────────
@@ -29,7 +40,7 @@ export class UserMemoryManager {
     requester: UserPermissions,
     userId: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, 'profile');
   }
 
@@ -38,7 +49,7 @@ export class UserMemoryManager {
     userId: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, 'profile', content);
     return true;
   }
@@ -49,7 +60,7 @@ export class UserMemoryManager {
     requester: UserPermissions,
     userId: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, 'preferences');
   }
 
@@ -58,7 +69,7 @@ export class UserMemoryManager {
     userId: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, 'preferences', content);
     return true;
   }
@@ -69,7 +80,7 @@ export class UserMemoryManager {
     requester: UserPermissions,
     userId: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, 'memory');
   }
 
@@ -78,7 +89,7 @@ export class UserMemoryManager {
     userId: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, 'memory', content);
     return true;
   }
@@ -89,7 +100,7 @@ export class UserMemoryManager {
     requester: UserPermissions,
     userId: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, 'sessions-index');
   }
 
@@ -98,7 +109,7 @@ export class UserMemoryManager {
     userId: string,
     sessionId: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, `sessions/${sessionId}`);
   }
 
@@ -108,7 +119,7 @@ export class UserMemoryManager {
     sessionId: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, `sessions/${sessionId}`, content);
     return true;
   }
@@ -120,7 +131,7 @@ export class UserMemoryManager {
     userId: string,
     projectName: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, `projects/${projectName}`);
   }
 
@@ -130,7 +141,7 @@ export class UserMemoryManager {
     projectName: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, `projects/${projectName}`, content);
     return true;
   }
@@ -142,7 +153,7 @@ export class UserMemoryManager {
     userId: string,
     key: string,
   ): Promise<string | null> {
-    if (!this.canAccess(requester, userId)) return null;
+    if (!this.canRead(requester, userId)) return null;
     return this.store.read(userId, key);
   }
 
@@ -152,7 +163,7 @@ export class UserMemoryManager {
     key: string,
     content: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     await this.store.write(userId, key, content);
     return true;
   }
@@ -162,7 +173,7 @@ export class UserMemoryManager {
     userId: string,
     key: string,
   ): Promise<boolean> {
-    if (!this.canAccess(requester, userId)) return false;
+    if (!this.canWrite(requester, userId)) return false;
     return this.store.delete(userId, key);
   }
 
@@ -170,7 +181,7 @@ export class UserMemoryManager {
     requester: UserPermissions,
     userId: string,
   ): Promise<string[]> {
-    if (!this.canAccess(requester, userId)) return [];
+    if (!this.canRead(requester, userId)) return [];
     return this.store.list(userId);
   }
 }

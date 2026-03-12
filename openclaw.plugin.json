@@ -1,0 +1,62 @@
+{
+  "id": "agent-rbac",
+  "name": "agent-rbac",
+  "description": "Adaptive RBAC, audit, and trust copilot for OpenClaw agents",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "permissionsConfigPath": {
+        "type": "string"
+      },
+      "stateDir": {
+        "type": "string"
+      },
+      "locale": {
+        "type": "string"
+      },
+      "promptGuard": {
+        "type": "boolean"
+      },
+      "toolGuard": {
+        "type": "boolean"
+      },
+      "gatewayMethods": {
+        "type": "boolean"
+      },
+      "maxSmokeSubagents": {
+        "type": "number"
+      },
+      "defaultUserIdStrategy": {
+        "type": "string",
+        "enum": ["session-key", "session-id"]
+      }
+    },
+    "required": ["permissionsConfigPath", "stateDir"]
+  },
+  "uiHints": {
+    "permissionsConfigPath": {
+      "label": "Permissions Config Path",
+      "help": "Absolute or ~-relative path to the permission config JSON.",
+      "placeholder": "~/.openclaw/agent-rbac.permissions.json"
+    },
+    "stateDir": {
+      "label": "State Directory",
+      "help": "Directory for audit, adaptive, and memory state.",
+      "placeholder": "~/.openclaw/agent-rbac-state"
+    },
+    "promptGuard": {
+      "label": "Prompt Guard",
+      "help": "Inject refusal or boundary guidance before model prompt build."
+    },
+    "toolGuard": {
+      "label": "Tool Guard",
+      "help": "Evaluate tool calls before execution and block denied calls."
+    },
+    "gatewayMethods": {
+      "label": "Gateway Methods",
+      "help": "Expose audit, evaluate, and smoke-test gateway methods."
+    }
+  }
+}

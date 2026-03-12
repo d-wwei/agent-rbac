@@ -1,0 +1,11 @@
+{
+  "userId": "alice",
+  "sessionId": "claude-session-001",
+  "prompt": "/mode plan",
+  "toolUse": {
+    "name": "webfetch",
+    "input": {
+      "path": "/tmp/notes.md"
+    }
+  }
+}

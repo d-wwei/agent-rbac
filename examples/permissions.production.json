@@ -1,0 +1,73 @@
+{
+  "owner": "owner_001",
+  "roles": {
+    "guest": {
+      "name": "Guest",
+      "permissions": [
+        "message.send",
+        "bridge.mode.ask",
+        "info.public.memory.read",
+        "info.own.memory.read"
+      ],
+      "deny": [],
+      "rateLimit": 20,
+      "maxMode": "ask"
+    },
+    "member": {
+      "name": "Member",
+      "permissions": [
+        "message.send",
+        "bridge.session.list",
+        "bridge.mode.ask",
+        "bridge.mode.plan",
+        "agent.file.read",
+        "agent.web.search",
+        "info.public.memory.read",
+        "info.own.memory.read",
+        "info.own.memory.write"
+      ],
+      "deny": [],
+      "rateLimit": 60,
+      "maxMode": "plan"
+    },
+    "reviewer": {
+      "name": "Reviewer",
+      "permissions": [
+        "message.send",
+        "bridge.mode.ask",
+        "bridge.mode.plan",
+        "audit.events.read",
+        "review.decisions.write",
+        "info.public.memory.read",
+        "info.own.memory.read"
+      ],
+      "deny": [],
+      "rateLimit": 100,
+      "maxMode": "plan"
+    }
+  },
+  "users": {
+    "alice": {
+      "name": "Alice",
+      "roles": [
+        "member"
+      ]
+    }
+  },
+  "defaults": {
+    "unknownUserRole": "guest"
+  },
+  "protectedPaths": {
+    "info.agent.config.read": [
+      "~/.agent/permissions.json",
+      "~/.openclaw/openclaw.json"
+    ],
+    "info.agent.memory.read": [
+      "~/.agent/memory/**",
+      "~/.openclaw/workspace/memory/**"
+    ],
+    "info.others.memory.read": [
+      "~/.agent/memory/users/**"
+    ]
+  }
+}

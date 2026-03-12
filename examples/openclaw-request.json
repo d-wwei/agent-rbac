@@ -1,0 +1,8 @@
+{
+  "userId": "alice",
+  "sessionId": "session-demo-001",
+  "agentId": "openclaw",
+  "channel": "discord",
+  "text": "/sessions",
+  "currentMode": "plan"
+}

@@ -9,19 +9,20 @@ import type {
   PermissionConfig,
   PermissionManagerOps,
 } from '../types.js';
+import { validateConfigSemantics } from '../config/schema.js';
 
 export class PermissionManager implements PermissionManagerOps {
   private config: PermissionConfig;
 
   constructor(private readonly configLoader: ConfigLoader) {
-    this.config = configLoader.load();
+    this.config = validateConfigSemantics(configLoader.load());
   }
 
   /**
    * Reload config from source.
    */
   reload(): void {
-    this.config = this.configLoader.load();
+    this.config = validateConfigSemantics(this.configLoader.load());
   }
 
   /**
@@ -118,6 +119,17 @@ export class PermissionManager implements PermissionManagerOps {
    * Delete a role. Does not remove it from existing users.
    */
   deleteRole(roleName: string): void {
+    if (this.config.defaults.unknownUserRole === roleName) {
+      throw new Error(`Cannot delete role "${roleName}" because it is the default unknown user role.`);
+    }
+    const assignedUsers = Object.entries(this.config.users)
+      .filter(([, user]) => user.roles.includes(roleName))
+      .map(([userId]) => userId);
+    if (assignedUsers.length > 0) {
+      throw new Error(
+        `Cannot delete role "${roleName}" because it is still assigned to users: ${assignedUsers.join(', ')}`,
+      );
+    }
     delete this.config.roles[roleName];
     this.persist();
   }
@@ -143,6 +155,7 @@ export class PermissionManager implements PermissionManagerOps {
   }
 
   private persist(): void {
+    validateConfigSemantics(this.config);
     if (this.configLoader.save) {
       this.configLoader.save(this.config);
     }

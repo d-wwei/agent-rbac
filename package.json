@@ -5,16 +5,44 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "openclaw": {
+    "extensions": [
+      "./dist/openclaw-plugin.js"
+    ]
+  },
+  "bin": {
+    "agent-rbac": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./cli": {
+      "import": "./dist/cli.js"
+    },
+    "./adapters/openclaw": {
+      "types": "./dist/adapters/openclaw.d.ts",
+      "import": "./dist/adapters/openclaw.js"
+    },
+    "./adapters/claude-code": {
+      "types": "./dist/adapters/claude-code.d.ts",
+      "import": "./dist/adapters/claude-code.js"
+    },
+    "./adapters/codex": {
+      "types": "./dist/adapters/codex.d.ts",
+      "import": "./dist/adapters/codex.js"
+    },
+    "./openclaw-plugin": {
+      "import": "./dist/openclaw-plugin.js"
     }
   },
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs",
+    "openclaw.plugin.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

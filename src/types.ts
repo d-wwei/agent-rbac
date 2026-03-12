@@ -75,7 +75,10 @@ export interface ToolCallContext {
 export interface ToolInterceptionResult {
   allowed: boolean;
   requiredPermission?: string;
+  code?: string;
   reason?: string;
+  normalizedPaths?: string[];
+  matchedPermissions?: string[];
 }
 
 // ── Rate Limiter ─────────────────────────────────────────────────
@@ -117,23 +120,45 @@ export interface EnforcementContext {
   currentMode?: string;
   /** Tool call context, if this is a tool invocation */
   toolCall?: ToolCallContext;
+  /** Optional locale hint for localized denial reasons */
+  locale?: string;
+}
+
+export interface EnforcementTrace {
+  evaluatedLayers: string[];
+  effectiveRole: string;
+  effectivePermissions: string[];
+  deniedBy?: string;
+  denialCode?: string;
+  commandPermission?: string | null;
+  enforcedMode?: string;
+  normalizedToolPaths?: string[];
+  matchedToolPermissions?: string[];
 }
 
 export interface EnforcementResult {
   allowed: boolean;
   /** Which layer denied the request */
   deniedBy?: string;
+  /** Stable denial code for localization / auditing */
+  code?: string;
   /** Human-friendly denial reason */
   reason?: string;
   /** Context modifications (e.g. injected prompts, loaded memory) */
   context?: Record<string, unknown>;
   /** Mode to enforce for this session */
   enforcedMode?: string;
+  /** Audit-friendly trace of why the decision happened */
+  trace?: EnforcementTrace;
 }
 
 export type EnforcementLayer = (
   ctx: EnforcementContext,
 ) => EnforcementResult | null;
+
+export type AsyncEnforcementLayer = (
+  ctx: EnforcementContext,
+) => EnforcementResult | null | Promise<EnforcementResult | null>;
 
 // ── Permission Manager ───────────────────────────────────────────
 

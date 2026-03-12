@@ -21,6 +21,7 @@ const config: PermissionConfig = {
       permissions: [
         'message.send',
         'info.own.memory.read',
+        'info.own.memory.write',
         'info.public.memory.read',
       ],
       rateLimit: 60,
@@ -98,6 +99,7 @@ describe('FileSystemMemoryStore', () => {
     await store.write('user_a', 'sessions/session_001', 'session data');
     const content = await store.read('user_a', 'sessions/session_001');
     expect(content).toBe('session data');
+    expect(await store.list('user_a')).toContain('sessions/session_001');
   });
 });
 
@@ -158,12 +160,50 @@ describe('UserMemoryManager', () => {
     expect(content).toBe('# Alice');
   });
 
+  it('cross-user read permission does not imply cross-user write permission', async () => {
+    const auditor = resolveUser(
+      {
+        ...config,
+        roles: {
+          ...config.roles,
+          auditor: {
+            name: 'Auditor',
+            permissions: ['message.send', 'info.others.memory.read'],
+            maxMode: 'ask',
+          },
+        },
+        users: {
+          ...config.users,
+          auditor_user: { name: 'Auditor', roles: ['auditor'] },
+        },
+      },
+      'auditor_user',
+    );
+    await store.write('user_b', 'profile', '# Bob');
+    expect(await manager.readProfile(auditor, 'user_b')).toBe('# Bob');
+    expect(await manager.writeProfile(auditor, 'user_b', 'overwrite')).toBe(false);
+  });
+
   // ── Preferences ───────────────────────────────────────────────
 
   it('user writes and reads own preferences', async () => {
     await manager.writePreferences(userA, 'user_a', 'lang: zh');
     const content = await manager.readPreferences(userA, 'user_a');
     expect(content).toBe('lang: zh');
+  });
+
+  it('read permission does not imply write permission', async () => {
+    const readOnlyUser = resolveUser(
+      {
+        ...config,
+        users: {
+          ...config.users,
+          user_ro: { name: 'ReadOnly', roles: ['guest'] },
+        },
+      },
+      'user_ro',
+    );
+    expect(await manager.writeMemory(readOnlyUser, 'user_ro', 'blocked')).toBe(false);
   });
 
   // ── Memory ────────────────────────────────────────────────────

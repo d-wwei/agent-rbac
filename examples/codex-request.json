@@ -1,0 +1,11 @@
+{
+  "userId": "alice",
+  "sessionId": "codex-session-001",
+  "input": "/sessions",
+  "toolCall": {
+    "name": "bash",
+    "arguments": {
+      "cwd": "/tmp/workspace"
+    }
+  }
+}

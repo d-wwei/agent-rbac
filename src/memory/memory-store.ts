@@ -33,6 +33,7 @@ export class FileSystemMemoryStore implements MemoryStore {
     const filePath = this.getPath(userId, key);
     try {
       fs.unlinkSync(filePath);
+      this.pruneEmptyDirectories(path.dirname(filePath));
       return true;
     } catch {
       return false;
@@ -40,12 +41,9 @@ export class FileSystemMemoryStore implements MemoryStore {
   }
 
   async list(userId: string): Promise<string[]> {
-    const userDir = path.join(this.basePath, this.sanitize(userId));
+    const userDir = path.join(this.basePath, this.sanitizeSegment(userId));
     try {
-      const entries = fs.readdirSync(userDir, { withFileTypes: true });
-      return entries
-        .filter((e) => e.isFile() && e.name.endsWith('.md'))
-        .map((e) => e.name.replace(/\.md$/, ''));
+      return this.walkKeys(userDir);
     } catch {
       return [];
     }
@@ -56,17 +54,59 @@ export class FileSystemMemoryStore implements MemoryStore {
   }
 
   private getPath(userId: string, key: string): string {
-    return path.join(
-      this.basePath,
-      this.sanitize(userId),
-      `${this.sanitize(key)}.md`,
-    );
+    const safeUser = this.sanitizeSegment(userId);
+    const safeSegments = this.sanitizeKey(key);
+    const fileSegments = [...safeSegments];
+    const last = fileSegments.pop() ?? 'index';
+    return path.join(this.basePath, safeUser, ...fileSegments, `${last}.md`);
   }
 
   /**
    * Sanitize path components to prevent directory traversal.
    */
-  private sanitize(segment: string): string {
+  private sanitizeSegment(segment: string): string {
     return segment.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  }
+
+  private sanitizeKey(key: string): string[] {
+    const segments = key
+      .split('/')
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+      .map((segment) => this.sanitizeSegment(segment));
+    return segments.length > 0 ? segments : ['index'];
+  }
+
+  private walkKeys(dir: string, prefix: string = ''): string[] {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const results: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        results.push(
+          ...this.walkKeys(
+            path.join(dir, entry.name),
+            prefix ? `${prefix}/${entry.name}` : entry.name,
+          ),
+        );
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      const key = entry.name.replace(/\.md$/, '');
+      results.push(prefix ? `${prefix}/${key}` : key);
+    }
+
+    return results;
+  }
+
+  private pruneEmptyDirectories(startDir: string): void {
+    let current = startDir;
+    const root = path.resolve(this.basePath);
+    while (current.startsWith(root) && current !== root) {
+      if (fs.readdirSync(current).length > 0) break;
+      fs.rmdirSync(current);
+      current = path.dirname(current);
+    }
   }
 }

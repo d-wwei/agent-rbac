@@ -2,6 +2,7 @@
  * Layer 5: Tool Interception — protected path matching + tool permission checks.
  */
 
+import * as fs from 'node:fs';
 import picomatch from 'picomatch';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -13,6 +14,7 @@ import type {
   RbacAdapter,
 } from '../types.js';
 import { hasPermission } from '../core/permission-resolver.js';
+import { formatReason } from '../core/messages.js';
 
 // ── Protected Path Matcher ───────────────────────────────────────
 
@@ -26,7 +28,7 @@ export class ProtectedPathMatcher {
   constructor(protectedPaths: Record<string, string[]>) {
     const entries = Object.entries(protectedPaths).map(
       ([permission, patterns]) => {
-        const expanded = patterns.map((p) => this.expandPath(p));
+        const expanded = patterns.map((p) => this.normalizePath(p));
         return {
           permission,
           patterns: expanded,
@@ -48,7 +50,7 @@ export class ProtectedPathMatcher {
    * Returns the required permission, or null if the path is not protected.
    */
   match(filePath: string): string | null {
-    const normalized = this.expandPath(filePath);
+    const normalized = this.normalizePath(filePath);
     for (const matcher of this.matchers) {
       if (matcher.isMatch(normalized)) {
         return matcher.permission;
@@ -61,7 +63,7 @@ export class ProtectedPathMatcher {
    * Match a file path and return all matching permissions.
    */
   matchAll(filePath: string): string[] {
-    const normalized = this.expandPath(filePath);
+    const normalized = this.normalizePath(filePath);
     const results: string[] = [];
     for (const matcher of this.matchers) {
       if (matcher.isMatch(normalized)) {
@@ -71,11 +73,19 @@ export class ProtectedPathMatcher {
     return results;
   }
 
-  private expandPath(p: string): string {
-    if (p.startsWith('~/')) {
-      return path.join(os.homedir(), p.slice(2));
+  normalizePath(p: string): string {
+    const expanded = p.startsWith('~/')
+      ? path.join(os.homedir(), p.slice(2))
+      : p;
+    const resolved = path.resolve(expanded);
+    try {
+      if (fs.existsSync(resolved)) {
+        return fs.realpathSync.native(resolved);
+      }
+    } catch {
+      // Fall back to resolved when realpath fails.
     }
-    return p;
+    return resolved;
   }
 }
 
@@ -101,35 +111,59 @@ export class ToolInterceptor {
   check(
     user: UserPermissions,
     toolCall: ToolCallContext,
+    locale?: string,
   ): ToolInterceptionResult {
+    const matchedPermissions: string[] = [];
+    const normalizedPaths = this.resolveFilePaths(toolCall);
+
     // Check tool-level permission via adapter
     if (this.adapter?.mapToolPermission) {
       const perm = this.adapter.mapToolPermission(toolCall.toolName);
+      if (perm) matchedPermissions.push(perm);
       if (perm && !hasPermission(user, perm)) {
         return {
           allowed: false,
           requiredPermission: perm,
-          reason: `Tool "${toolCall.toolName}" requires permission "${perm}"`,
+          code: 'tool.permission',
+          reason: formatReason(
+            'tool.permission',
+            { tool: toolCall.toolName, permission: perm },
+            locale,
+          ),
+          normalizedPaths,
+          matchedPermissions,
         };
       }
     }
 
     // Check file path permissions
     if (this.pathMatcher) {
-      const filePaths = this.resolveFilePaths(toolCall);
-      for (const fp of filePaths) {
-        const requiredPerm = this.pathMatcher.match(fp);
-        if (requiredPerm && !hasPermission(user, requiredPerm)) {
+      for (const fp of normalizedPaths) {
+        const requiredPerms = this.pathMatcher.matchAll(fp);
+        matchedPermissions.push(...requiredPerms);
+        const missing = requiredPerms.find((perm) => !hasPermission(user, perm));
+        if (missing) {
           return {
             allowed: false,
-            requiredPermission: requiredPerm,
-            reason: `Access to path "${fp}" requires permission "${requiredPerm}"`,
+            requiredPermission: missing,
+            code: 'tool.path',
+            reason: formatReason(
+              'tool.path',
+              { path: fp, permission: missing },
+              locale,
+            ),
+            normalizedPaths,
+            matchedPermissions,
           };
         }
       }
     }
 
-    return { allowed: true };
+    return {
+      allowed: true,
+      normalizedPaths,
+      matchedPermissions,
+    };
   }
 
   private resolveFilePaths(toolCall: ToolCallContext): string[] {
@@ -137,20 +171,21 @@ export class ToolInterceptor {
     if (this.adapter?.extractFilePaths) {
       const paths = this.adapter.extractFilePaths(toolCall);
       return paths.map((p) =>
-        this.adapter?.expandPath ? this.adapter.expandPath(p) : this.expandDefault(p),
+        this.normalizePath(
+          this.adapter?.expandPath ? this.adapter.expandPath(p) : p,
+        ),
       );
     }
     // Fall back to toolCall.filePaths
     if (toolCall.filePaths) {
-      return toolCall.filePaths.map((p) => this.expandDefault(p));
+      return toolCall.filePaths.map((p) => this.normalizePath(p));
     }
     return [];
   }
 
-  private expandDefault(p: string): string {
-    if (p.startsWith('~/')) {
-      return path.join(os.homedir(), p.slice(2));
-    }
-    return p;
+  private normalizePath(p: string): string {
+    return this.pathMatcher?.normalizePath(p) ?? path.resolve(
+      p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p,
+    );
   }
 }

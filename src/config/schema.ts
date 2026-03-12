@@ -2,7 +2,7 @@
  * Runtime configuration validation.
  */
 
-import type { PermissionConfig } from '../types.js';
+import type { PermissionConfig, ModeHierarchy } from '../types.js';
 
 export class ConfigValidationError extends Error {
   constructor(
@@ -89,6 +89,43 @@ export function validateConfig(config: unknown): PermissionConfig {
   return config as PermissionConfig;
 }
 
+export function validateConfigSemantics(
+  config: PermissionConfig,
+  opts?: { hierarchy?: ModeHierarchy },
+): PermissionConfig {
+  if (!config.roles[config.defaults.unknownUserRole]) {
+    throw new ConfigValidationError(
+      `unknownUserRole "${config.defaults.unknownUserRole}" does not exist in roles`,
+      'defaults.unknownUserRole',
+    );
+  }
+
+  for (const [userId, user] of Object.entries(config.users)) {
+    for (const roleName of user.roles) {
+      if (!config.roles[roleName]) {
+        throw new ConfigValidationError(
+          `user "${userId}" references missing role "${roleName}"`,
+          `users.${userId}.roles`,
+        );
+      }
+    }
+  }
+
+  if (opts?.hierarchy) {
+    const knownModes = new Set(Object.keys(opts.hierarchy.levels));
+    for (const [roleName, role] of Object.entries(config.roles)) {
+      if (role.maxMode && !knownModes.has(role.maxMode)) {
+        throw new ConfigValidationError(
+          `role "${roleName}" references unknown maxMode "${role.maxMode}"`,
+          `roles.${roleName}.maxMode`,
+        );
+      }
+    }
+  }
+
+  return config;
+}
+
 function validateRole(name: string, role: unknown): void {
   if (!role || typeof role !== 'object') {
     throw new ConfigValidationError(
@@ -109,16 +146,34 @@ function validateRole(name: string, role: unknown): void {
       `roles.${name}.permissions`,
     );
   }
+  for (const permission of r.permissions) {
+    if (typeof permission !== 'string') {
+      throw new ConfigValidationError(
+        'permissions entries must be strings',
+        `roles.${name}.permissions`,
+      );
+    }
+  }
   if (r.deny !== undefined && !Array.isArray(r.deny)) {
     throw new ConfigValidationError(
       'deny must be an array',
       `roles.${name}.deny`,
     );
   }
+  if (Array.isArray(r.deny)) {
+    for (const deny of r.deny) {
+      if (typeof deny !== 'string') {
+        throw new ConfigValidationError(
+          'deny entries must be strings',
+          `roles.${name}.deny`,
+        );
+      }
+    }
+  }
   if (
     r.rateLimit !== undefined &&
     r.rateLimit !== null &&
-    typeof r.rateLimit !== 'number'
+    (typeof r.rateLimit !== 'number' || !Number.isFinite(r.rateLimit) || r.rateLimit < 0)
   ) {
     throw new ConfigValidationError(
       'rateLimit must be a number or null',
@@ -153,11 +208,29 @@ function validateUser(userId: string, user: unknown): void {
       `users.${userId}.roles`,
     );
   }
+  for (const roleName of u.roles) {
+    if (typeof roleName !== 'string') {
+      throw new ConfigValidationError(
+        'roles entries must be strings',
+        `users.${userId}.roles`,
+      );
+    }
+  }
   if (u.permissions !== undefined && !Array.isArray(u.permissions)) {
     throw new ConfigValidationError(
       'permissions must be an array',
       `users.${userId}.permissions`,
     );
+  }
+  if (Array.isArray(u.permissions)) {
+    for (const permission of u.permissions) {
+      if (typeof permission !== 'string') {
+        throw new ConfigValidationError(
+          'permissions entries must be strings',
+          `users.${userId}.permissions`,
+        );
+      }
+    }
   }
   if (u.deny !== undefined && !Array.isArray(u.deny)) {
     throw new ConfigValidationError(
@@ -165,10 +238,20 @@ function validateUser(userId: string, user: unknown): void {
       `users.${userId}.deny`,
     );
   }
+  if (Array.isArray(u.deny)) {
+    for (const deny of u.deny) {
+      if (typeof deny !== 'string') {
+        throw new ConfigValidationError(
+          'deny entries must be strings',
+          `users.${userId}.deny`,
+        );
+      }
+    }
+  }
   if (
     u.rateLimit !== undefined &&
     u.rateLimit !== null &&
-    typeof u.rateLimit !== 'number'
+    (typeof u.rateLimit !== 'number' || !Number.isFinite(u.rateLimit) || u.rateLimit < 0)
   ) {
     throw new ConfigValidationError(
       'rateLimit must be a number or null',

@@ -6,6 +6,86 @@ Role-based access control and memory isolation framework for multi-user AI agent
 
 ---
 
+## Product Design Docs
+
+- [Design Index](./docs/INDEX.md)
+- [Product Architecture](./docs/ARCHITECTURE.md)
+- [Policy Model Design](./docs/POLICY-MODEL.md)
+- [Host Contract & Adapter Architecture](./docs/HOST-CONTRACT-AND-ADAPTERS.md)
+- [Audit & Explainability](./docs/AUDIT-EXPLAINABILITY.md)
+- [Adaptive Policy Copilot](./docs/ADAPTIVE-POLICY-COPILOT.md)
+- [Data, Storage & Privacy](./docs/DATA-STORAGE-AND-PRIVACY.md)
+- [Implementation Roadmap](./docs/IMPLEMENTATION-ROADMAP.md)
+
+## Runtime Usage
+
+Production usage is no longer limited to importing the library. The package now includes:
+
+- host contract types
+- file-backed audit storage
+- adaptive policy copilot storage and services
+- a production runtime orchestrator
+- first-party OpenClaw, Claude Code, and Codex adapters
+- an installable OpenClaw plugin package
+- a CLI for evaluation, audit review, suggestions, and familiarity queries
+
+### CLI Quick Start
+
+```bash
+npm install
+npm run build
+node dist/cli.js evaluate \
+  --config ./examples/permissions.production.json \
+  --state-dir ./.agent-rbac-state \
+  --request ./examples/openclaw-request.json \
+  --host openclaw
+
+node dist/cli.js evaluate \
+  --config ./examples/permissions.production.json \
+  --state-dir ./.agent-rbac-state \
+  --request ./examples/claude-code-request.json \
+  --host claude-code
+
+node dist/cli.js evaluate \
+  --config ./examples/permissions.production.json \
+  --state-dir ./.agent-rbac-state \
+  --request ./examples/codex-request.json \
+  --host codex
+```
+
+Useful commands:
+
+```bash
+node dist/cli.js audit timeline --state-dir ./.agent-rbac-state
+node dist/cli.js suggestions --state-dir ./.agent-rbac-state --user alice
+node dist/cli.js familiarity --state-dir ./.agent-rbac-state --user alice
+```
+
+### OpenClaw Plugin Install
+
+Build the package, then install it into a local OpenClaw runtime with one command:
+
+```bash
+npm run build
+node dist/cli.js openclaw install \
+  --permissions-config ./examples/permissions.production.json \
+  --state-dir ~/.openclaw/agent-rbac-state
+```
+
+This command:
+
+- links the current package into OpenClaw via `openclaw plugins install --link`
+- writes `plugins.entries.agent-rbac.config`
+- enables internal hooks so prompt and tool guards can run
+
+To exercise the installed plugin against a running gateway:
+
+```bash
+node dist/cli.js openclaw smoke \
+  --url ws://127.0.0.1:19081 \
+  --token dummy
+```
+
 ## 中文文档
 
 ### 问题背景
@@ -27,6 +107,10 @@ npm install agent-rbac
 ```
 
 要求 Node.js >= 20，ESM 模块。
+
+说明：
+- `Command Filter` 默认采用严格模式，未注册命令会被拒绝。
+- 需要真实加载 memory 内容时，优先使用 `enforceAsync()`。
 
 ### 核心概念
 
@@ -86,7 +170,7 @@ const pipeline = new EnforcementPipeline({
   rateLimiter: new RateLimiter({ windowMs: 3600_000 }),
 });
 
-const result = pipeline.enforce({
+const result = await pipeline.enforceAsync({
   userId: 'alice',
   message: '/mode code',
   command: '/mode',
@@ -149,11 +233,15 @@ const memory = new UserMemoryManager(store);
 const owner = resolveUser(config, 'owner_001');
 const alice = resolveUser(config, 'alice');
 
+// 需要 info.own.memory.write 权限
 await memory.writeProfile(alice, 'alice', '# Alice\nEngineer');
 await memory.readProfile(alice, 'alice');  // "# Alice\nEngineer"
 await memory.readProfile(alice, 'bob');    // null（隔离）
 await memory.readProfile(owner, 'alice');  // "# Alice\nEngineer"（Owner 可读）
 ```
+
+自己的 memory 权限已拆分为 `info.own.memory.read` / `info.own.memory.write`，
+跨用户权限拆分为 `info.others.memory.read` / `info.others.memory.write`。
 
 ### 配置格式
 
@@ -179,7 +267,7 @@ await memory.readProfile(owner, 'alice');  // "# Alice\nEngineer"（Owner 可读
     "user_123": {
       "name": "Alice",
       "roles": ["member"],
-      "permissions": ["agent.file.read"],
+      "permissions": ["agent.file.read", "info.own.memory.write"],
       "deny": []
     }
   },
@@ -205,6 +293,13 @@ await memory.readProfile(owner, 'alice');  // "# Alice\nEngineer"（Owner 可读
 | Messaging | `message.send` | 基本消息发送权限 |
 
 通配符：`*`（全部）、`bridge.*`（分类通配）
+
+### 新增能力
+
+- `enforceAsync()`：异步执行完整管线，并真正加载 public / owner / user memory
+- `trace`：每次 enforcement 返回可审计的 trace，包含层、角色、权限、模式等信息
+- 配置语义校验：检查 default role、用户引用 role、`maxMode` 等问题
+- 路径规范化：工具拦截会对路径做 `resolve/realpath` 规范化，减少绕过风险
 
 ---
 

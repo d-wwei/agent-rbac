@@ -5,6 +5,7 @@
 import type { EnforcementContext, EnforcementResult, EnforcementLayer } from '../types.js';
 import { hasPermission } from '../core/permission-resolver.js';
 import { RateLimiter } from '../core/rate-limiter.js';
+import { formatReason } from '../core/messages.js';
 
 export function createGatewayLayer(rateLimiter: RateLimiter): EnforcementLayer {
   return (ctx: EnforcementContext): EnforcementResult | null => {
@@ -13,7 +14,15 @@ export function createGatewayLayer(rateLimiter: RateLimiter): EnforcementLayer {
       return {
         allowed: false,
         deniedBy: 'gateway',
-        reason: '你的消息发送频率已达上限，请稍后再试。',
+        code: 'gateway.rate_limit',
+        reason: formatReason('gateway.rate_limit', {}, ctx.locale),
+        trace: {
+          evaluatedLayers: ['gateway'],
+          effectiveRole: ctx.user.topRole,
+          effectivePermissions: Array.from(ctx.user.permissions).sort(),
+          deniedBy: 'gateway',
+          denialCode: 'gateway.rate_limit',
+        },
       };
     }
 
@@ -22,7 +31,15 @@ export function createGatewayLayer(rateLimiter: RateLimiter): EnforcementLayer {
       return {
         allowed: false,
         deniedBy: 'gateway',
-        reason: '当前没有发送消息的权限。',
+        code: 'gateway.message_send',
+        reason: formatReason('gateway.message_send', {}, ctx.locale),
+        trace: {
+          evaluatedLayers: ['gateway'],
+          effectiveRole: ctx.user.topRole,
+          effectivePermissions: Array.from(ctx.user.permissions).sort(),
+          deniedBy: 'gateway',
+          denialCode: 'gateway.message_send',
+        },
       };
     }
 

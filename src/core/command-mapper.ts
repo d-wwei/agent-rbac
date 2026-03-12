@@ -33,8 +33,13 @@ const BRIDGE_COMMAND_DEFAULTS: CommandMapping[] = [
 
 export class CommandMapper {
   private readonly mappings = new Map<string, CommandMapping>();
+  private readonly strict: boolean;
 
-  constructor(presets: CommandMapping[] = BRIDGE_COMMAND_DEFAULTS) {
+  constructor(
+    presets: CommandMapping[] = BRIDGE_COMMAND_DEFAULTS,
+    opts?: { strict?: boolean },
+  ) {
+    this.strict = opts?.strict ?? true;
     for (const mapping of presets) {
       this.mappings.set(mapping.command, mapping);
     }
@@ -63,11 +68,14 @@ export class CommandMapper {
 
   /**
    * Get the required permission for a command.
-   * Returns null for commands that are always allowed or unknown.
+   * Returns:
+   * - string: required permission
+   * - null: explicitly always allowed
+   * - undefined: unknown command in strict mode
    */
-  getPermission(command: string, args?: string): string | null {
+  getPermission(command: string, args?: string): string | null | undefined {
     const mapping = this.mappings.get(command);
-    if (!mapping) return null;
+    if (!mapping) return this.strict ? undefined : null;
     if (mapping.permission === null) return null;
     if (mapping.appendArgs && args) {
       return `${mapping.permission}.${args}`;
@@ -87,5 +95,9 @@ export class CommandMapper {
    */
   list(): CommandMapping[] {
     return Array.from(this.mappings.values());
+  }
+
+  isStrict(): boolean {
+    return this.strict;
   }
 }
