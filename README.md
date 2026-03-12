@@ -78,6 +78,13 @@ This command:
 - writes `plugins.entries.agent-rbac.config`
 - enables internal hooks so prompt and tool guards can run
 
+OpenClaw plugin defaults are production-oriented:
+
+- `defaultUserIdStrategy` defaults to `session-origin`
+- the plugin reads OpenClaw `sessions.json` metadata and prefers `provider + accountId + sender` as the external user identity
+- when origin metadata is missing, it falls back to `sessionId`, then `sessionKey`
+- you can override discovery with `openClawStateDir` or an explicit `sessionStorePath`
+
 To exercise the installed plugin against a running gateway:
 
 ```bash

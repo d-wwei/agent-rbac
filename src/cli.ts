@@ -337,10 +337,12 @@ function ensurePluginConfigured(
     config: {
       permissionsConfigPath: params.permissionsConfigPath,
       stateDir: params.stateDir,
+      openClawStateDir: path.join(os.homedir(), '.openclaw'),
       locale: params.locale,
       promptGuard: true,
       toolGuard: true,
       gatewayMethods: true,
+      defaultUserIdStrategy: 'session-origin',
     },
   };
   if (params.includeAllow) {

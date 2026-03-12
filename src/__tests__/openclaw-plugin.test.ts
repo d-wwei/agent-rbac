@@ -10,7 +10,11 @@ type RegisteredMethods = Map<string, (options: {
   respond: (ok: boolean, payload?: unknown, error?: { message?: string }) => void;
 }) => Promise<void> | void>;
 
-function createMockApi(configPath: string, stateDir: string): {
+function createMockApi(
+  configPath: string,
+  stateDir: string,
+  extraPluginConfig: Record<string, unknown> = {},
+): {
   hooks: RegisteredHooks;
   methods: RegisteredMethods;
   loggerMessages: string[];
@@ -50,6 +54,7 @@ function createMockApi(configPath: string, stateDir: string): {
       pluginConfig: {
         permissionsConfigPath: configPath,
         stateDir,
+        ...extraPluginConfig,
       },
       logger: {
         info: (message) => loggerMessages.push(message),
@@ -128,6 +133,54 @@ describe('OpenClaw plugin', () => {
     expect(result?.prependContext).toContain('denied');
   });
 
+  it('parses timestamp-wrapped OpenClaw slash commands before enforcing permissions', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-rbac-openclaw-plugin-'));
+    tempDirs.push(dir);
+    const configPath = path.join(dir, 'permissions.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      owner: 'owner',
+      roles: {
+        guest: {
+          name: 'Guest',
+          permissions: ['message.send', 'bridge.mode.ask'],
+          maxMode: 'ask',
+          rateLimit: 5,
+        },
+      },
+      users: {},
+      defaults: { unknownUserRole: 'guest' },
+    }, null, 2));
+
+    const { api, hooks, methods } = createMockApi(configPath, path.join(dir, 'state'));
+    OpenClawPlugin.register(api);
+
+    const handler = hooks.get('before_prompt_build');
+    await handler?.(
+      { prompt: '[Fri 2026-03-13 02:53 GMT+8] /mode code', messages: [] },
+      { sessionKey: 'agent:main:user:guest-3', sessionId: 's3', agentId: 'main' },
+    );
+
+    const timeline = methods.get('agent_rbac.audit.timeline');
+    let response: unknown;
+    await timeline?.({
+      params: { sessionId: 's3', limit: 1 },
+      respond(ok, payload, error) {
+        response = ok ? payload : error;
+      },
+    });
+
+    expect(response).toMatchObject({
+      decisions: [
+        expect.objectContaining({
+          result: expect.objectContaining({
+            allowed: false,
+            code: 'command_filter.forbidden',
+          }),
+        }),
+      ],
+    });
+  });
+
   it('blocks denied tool calls and exposes gateway smoke methods', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-rbac-openclaw-plugin-'));
     tempDirs.push(dir);
@@ -188,6 +241,84 @@ describe('OpenClaw plugin', () => {
         expect.objectContaining({
           sessionKey: 'agent:main:subagent:test',
           status: 'ok',
+        }),
+      ],
+    });
+  });
+
+  it('derives external identity from the OpenClaw session store by default', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-rbac-openclaw-plugin-'));
+    tempDirs.push(dir);
+    const configPath = path.join(dir, 'permissions.json');
+    const stateDir = path.join(dir, 'state');
+    const openClawStateDir = path.join(dir, '.openclaw');
+    const sessionStorePath = path.join(openClawStateDir, 'agents', 'main', 'sessions', 'sessions.json');
+    fs.mkdirSync(path.dirname(sessionStorePath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      owner: 'owner',
+      roles: {
+        guest: {
+          name: 'Guest',
+          permissions: ['message.send', 'bridge.mode.ask'],
+          rateLimit: 5,
+          maxMode: 'ask',
+        },
+      },
+      users: {},
+      defaults: { unknownUserRole: 'guest' },
+    }, null, 2));
+    fs.writeFileSync(sessionStorePath, JSON.stringify({
+      'agent:main:discord:direct:1126411859080265778': {
+        sessionId: 'session-discord-1',
+        origin: {
+          provider: 'discord',
+          from: 'discord:1126411859080265778',
+          to: 'channel:1479726948648222740',
+          accountId: 'default',
+        },
+        lastChannel: 'discord',
+        deliveryContext: {
+          channel: 'discord',
+          accountId: 'default',
+        },
+      },
+    }, null, 2));
+
+    const { api, hooks, methods } = createMockApi(
+      configPath,
+      stateDir,
+      { openClawStateDir },
+    );
+    OpenClawPlugin.register(api);
+
+    const promptHandler = hooks.get('before_prompt_build');
+    await promptHandler?.(
+      { prompt: 'hello', messages: [] },
+      {
+        sessionKey: 'agent:main:discord:direct:1126411859080265778',
+        sessionId: 'ignored-session-id',
+        agentId: 'main',
+      },
+    );
+
+    const timeline = methods.get('agent_rbac.audit.timeline');
+    let response: unknown;
+    await timeline?.({
+      params: {
+        userId: 'external:discord:account:default:actor:1126411859080265778',
+      },
+      respond(ok, payload, error) {
+        response = ok ? payload : error;
+      },
+    });
+
+    expect(response).toMatchObject({
+      decisions: [
+        expect.objectContaining({
+          actor: expect.objectContaining({
+            userId: 'external:discord:account:default:actor:1126411859080265778',
+            tenantId: 'external-tenant:discord:default',
+          }),
         }),
       ],
     });

@@ -13,6 +13,12 @@
       "stateDir": {
         "type": "string"
       },
+      "openClawStateDir": {
+        "type": "string"
+      },
+      "sessionStorePath": {
+        "type": "string"
+      },
       "locale": {
         "type": "string"
       },
@@ -30,7 +36,7 @@
       },
       "defaultUserIdStrategy": {
         "type": "string",
-        "enum": ["session-key", "session-id"]
+        "enum": ["session-origin", "session-key", "session-id"]
       }
     },
     "required": ["permissionsConfigPath", "stateDir"]
@@ -46,6 +52,15 @@
       "help": "Directory for audit, adaptive, and memory state.",
       "placeholder": "~/.openclaw/agent-rbac-state"
     },
+    "openClawStateDir": {
+      "label": "OpenClaw State Directory",
+      "help": "Root OpenClaw state dir used to discover session metadata for external identity mapping.",
+      "placeholder": "~/.openclaw"
+    },
+    "sessionStorePath": {
+      "label": "Session Store Path",
+      "help": "Optional explicit sessions.json path. Overrides automatic discovery from OpenClaw state dir."
+    },
     "promptGuard": {
       "label": "Prompt Guard",
       "help": "Inject refusal or boundary guidance before model prompt build."
@@ -57,6 +72,10 @@
     "gatewayMethods": {
       "label": "Gateway Methods",
       "help": "Expose audit, evaluate, and smoke-test gateway methods."
+    },
+    "defaultUserIdStrategy": {
+      "label": "Default User ID Strategy",
+      "help": "Default is session-origin, which derives stable external identities from OpenClaw session origin metadata before falling back to session identifiers."
     }
   }
 }

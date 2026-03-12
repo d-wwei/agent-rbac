@@ -99,15 +99,47 @@ type OpenClawLlmOutputEvent = {
   assistantTexts: string[];
 };
 
+type OpenClawSessionOrigin = {
+  provider?: string;
+  from?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type OpenClawSessionDeliveryContext = {
+  channel?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type OpenClawSessionEntry = {
+  sessionId?: string;
+  channel?: string;
+  lastChannel?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+  origin?: OpenClawSessionOrigin;
+  deliveryContext?: OpenClawSessionDeliveryContext;
+};
+
+type ResolvedOpenClawIdentity = {
+  userId: string;
+  tenantId?: string;
+  metadata: Record<string, unknown>;
+};
+
 type PluginConfig = {
   permissionsConfigPath: string;
   stateDir: string;
+  openClawStateDir: string;
+  sessionStorePath?: string;
   locale?: string;
   promptGuard: boolean;
   toolGuard: boolean;
   gatewayMethods: boolean;
   maxSmokeSubagents: number;
-  defaultUserIdStrategy: 'session-key' | 'session-id';
+  defaultUserIdStrategy: 'session-origin' | 'session-key' | 'session-id';
 };
 
 class OpenClawRbacPlugin {
@@ -117,6 +149,10 @@ class OpenClawRbacPlugin {
   private readonly runtime: AgentSecurityRuntime<OpenClawGatewayRequest, string>;
   private readonly decisionBySession = new Map<string, HostDecision>();
   private readonly decisionByRun = new Map<string, HostDecision>();
+  private readonly sessionStoreCache = new Map<string, {
+    mtimeMs: number;
+    entries: Record<string, OpenClawSessionEntry>;
+  }>();
 
   constructor(private readonly api: OpenClawPluginApi) {
     this.config = resolvePluginConfig(api);
@@ -410,15 +446,23 @@ class OpenClawRbacPlugin {
     event: OpenClawPromptHookEvent,
     ctx: OpenClawPromptHookContext,
   ): OpenClawGatewayRequest {
+    const identity = this.resolveIdentity(ctx);
+    const parsedCommand = extractOpenClawCommand(event.prompt);
     return {
-      userId: this.resolveUserId(ctx),
+      userId: identity.userId,
       sessionId: ctx.sessionId ?? ctx.sessionKey ?? 'unknown-session',
       agentId: ctx.agentId ?? 'openclaw',
+      tenantId: identity.tenantId,
       workspaceId: ctx.workspaceDir,
       channel: ctx.channelId ?? 'openclaw',
       locale: this.config.locale,
       requestId: ctx.sessionId ?? ctx.sessionKey,
       text: event.prompt,
+      command: parsedCommand?.command,
+      commandArgs: parsedCommand?.args,
+      metadata: {
+        openclawIdentity: identity.metadata,
+      },
     };
   }
 
@@ -426,10 +470,12 @@ class OpenClawRbacPlugin {
     event: OpenClawToolHookEvent,
     ctx: OpenClawToolHookContext,
   ): OpenClawGatewayRequest {
+    const identity = this.resolveIdentity(ctx);
     return {
-      userId: this.resolveUserId(ctx),
+      userId: identity.userId,
       sessionId: ctx.sessionId ?? ctx.sessionKey ?? 'unknown-session',
       agentId: ctx.agentId ?? 'openclaw',
+      tenantId: identity.tenantId,
       channel: 'openclaw',
       locale: this.config.locale,
       requestId: event.runId ?? ctx.sessionId ?? ctx.sessionKey,
@@ -438,16 +484,184 @@ class OpenClawRbacPlugin {
         toolName: event.toolName,
         args: event.params,
       },
+      metadata: {
+        openclawIdentity: identity.metadata,
+      },
     };
   }
 
-  private resolveUserId(
+  private resolveIdentity(
+    ctx: Pick<OpenClawPromptHookContext & OpenClawToolHookContext, 'agentId' | 'sessionKey' | 'sessionId'>,
+  ): ResolvedOpenClawIdentity {
+    if (this.config.defaultUserIdStrategy === 'session-origin') {
+      const derived = this.resolveSessionOriginIdentity(ctx);
+      if (derived) {
+        return derived;
+      }
+    }
+
+    const userId = this.resolveFallbackUserId(ctx);
+    return {
+      userId,
+      metadata: {
+        strategy: this.config.defaultUserIdStrategy,
+        source: 'fallback',
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+      },
+    };
+  }
+
+  private resolveSessionOriginIdentity(
+    ctx: Pick<OpenClawPromptHookContext & OpenClawToolHookContext, 'agentId' | 'sessionKey' | 'sessionId'>,
+  ): ResolvedOpenClawIdentity | null {
+    const sessionKey = asOptionalString(ctx.sessionKey);
+    if (!sessionKey) {
+      return null;
+    }
+    const entry = this.lookupSessionEntry(sessionKey, ctx.agentId);
+    if (!entry) {
+      return null;
+    }
+
+    const provider = normalizeIdentitySegment(
+      entry.origin?.provider ?? entry.deliveryContext?.channel ?? entry.lastChannel ?? entry.channel,
+    );
+    if (!provider) {
+      return null;
+    }
+    const accountId = normalizeIdentitySegment(
+      entry.origin?.accountId ?? entry.deliveryContext?.accountId ?? entry.lastAccountId,
+    );
+    const actor = normalizeIdentitySegment(
+      stripProviderPrefix(entry.origin?.from ?? entry.origin?.to, provider),
+    );
+    const threadId = normalizeIdentitySegment(
+      entry.origin?.threadId ?? entry.deliveryContext?.threadId ?? entry.lastThreadId,
+    );
+
+    let userId: string | null = null;
+    if (actor) {
+      userId = accountId
+        ? `external:${provider}:account:${accountId}:actor:${actor}`
+        : `external:${provider}:actor:${actor}`;
+    } else if (threadId) {
+      userId = accountId
+        ? `external:${provider}:account:${accountId}:thread:${threadId}`
+        : `external:${provider}:thread:${threadId}`;
+    }
+
+    if (!userId) {
+      return null;
+    }
+
+    const tenantId = accountId
+      ? `external-tenant:${provider}:${accountId}`
+      : `external-tenant:${provider}`;
+
+    return {
+      userId,
+      tenantId,
+      metadata: {
+        strategy: 'session-origin',
+        source: 'openclaw-session-store',
+        provider,
+        accountId,
+        actor,
+        threadId,
+        sessionId: entry.sessionId ?? ctx.sessionId,
+        sessionKey,
+      },
+    };
+  }
+
+  private resolveFallbackUserId(
     ctx: Pick<OpenClawPromptHookContext & OpenClawToolHookContext, 'sessionKey' | 'sessionId'>,
   ): string {
-    if (this.config.defaultUserIdStrategy === 'session-id' && ctx.sessionId) {
+    if (this.config.defaultUserIdStrategy === 'session-key') {
+      return ctx.sessionKey ?? ctx.sessionId ?? 'unknown-user';
+    }
+    if (ctx.sessionId) {
       return ctx.sessionId;
     }
-    return ctx.sessionKey ?? ctx.sessionId ?? 'unknown-user';
+    return ctx.sessionKey ?? 'unknown-user';
+  }
+
+  private lookupSessionEntry(
+    sessionKey: string,
+    agentId?: string,
+  ): OpenClawSessionEntry | null {
+    const storePath = this.resolveSessionStorePath(agentId);
+    if (!fs.existsSync(storePath)) {
+      return null;
+    }
+
+    try {
+      const stat = fs.statSync(storePath);
+      const cached = this.sessionStoreCache.get(storePath);
+      let entries = cached?.entries;
+      if (!entries || cached?.mtimeMs !== stat.mtimeMs) {
+        entries = this.readSessionStoreEntries(storePath);
+        this.sessionStoreCache.set(storePath, { mtimeMs: stat.mtimeMs, entries });
+      }
+      return entries[normalizeSessionStoreKey(sessionKey)] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private readSessionStoreEntries(
+    storePath: string,
+  ): Record<string, OpenClawSessionEntry> {
+    const raw = fs.readFileSync(storePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!isObject(parsed)) {
+      return {};
+    }
+
+    const entries: Record<string, OpenClawSessionEntry> = {};
+    for (const [sessionKey, value] of Object.entries(parsed)) {
+      if (!isObject(value)) {
+        continue;
+      }
+      entries[normalizeSessionStoreKey(sessionKey)] = {
+        sessionId: asOptionalString(value.sessionId),
+        channel: asOptionalString(value.channel),
+        lastChannel: asOptionalString(value.lastChannel),
+        lastAccountId: asOptionalString(value.lastAccountId),
+        lastThreadId: asOptionalStringOrNumber(value.lastThreadId),
+        origin: isObject(value.origin)
+          ? {
+              provider: asOptionalString(value.origin.provider),
+              from: asOptionalString(value.origin.from),
+              to: asOptionalString(value.origin.to),
+              accountId: asOptionalString(value.origin.accountId),
+              threadId: asOptionalStringOrNumber(value.origin.threadId),
+            }
+          : undefined,
+        deliveryContext: isObject(value.deliveryContext)
+          ? {
+              channel: asOptionalString(value.deliveryContext.channel),
+              accountId: asOptionalString(value.deliveryContext.accountId),
+              threadId: asOptionalStringOrNumber(value.deliveryContext.threadId),
+            }
+          : undefined,
+      };
+    }
+    return entries;
+  }
+
+  private resolveSessionStorePath(agentId?: string): string {
+    if (this.config.sessionStorePath) {
+      return this.config.sessionStorePath;
+    }
+    return path.join(
+      this.config.openClawStateDir,
+      'agents',
+      normalizeAgentId(agentId ?? 'main'),
+      'sessions',
+      'sessions.json',
+    );
   }
 
   private rememberDecision(
@@ -494,19 +708,29 @@ function resolvePluginConfig(api: OpenClawPluginApi): PluginConfig {
   const stateDir = api.resolvePath(
     asOptionalString(value.stateDir) ?? '~/.openclaw/agent-rbac-state',
   );
+  const openClawStateDir = api.resolvePath(
+    asOptionalString(value.openClawStateDir) ?? '~/.openclaw',
+  );
+  const sessionStorePath = asOptionalString(value.sessionStorePath)
+    ? api.resolvePath(asOptionalString(value.sessionStorePath) ?? '')
+    : undefined;
   if (!permissionsConfigPath) {
     throw new Error('agent-rbac plugin requires pluginConfig.permissionsConfigPath');
   }
   return {
     permissionsConfigPath,
     stateDir,
+    openClawStateDir,
+    sessionStorePath,
     locale: asOptionalString(value.locale) ?? 'zh-CN',
     promptGuard: value.promptGuard !== false,
     toolGuard: value.toolGuard !== false,
     gatewayMethods: value.gatewayMethods !== false,
     maxSmokeSubagents: asOptionalNumber(value.maxSmokeSubagents) ?? 4,
     defaultUserIdStrategy:
-      value.defaultUserIdStrategy === 'session-id' ? 'session-id' : 'session-key',
+      value.defaultUserIdStrategy === 'session-key' || value.defaultUserIdStrategy === 'session-id'
+        ? value.defaultUserIdStrategy
+        : 'session-origin',
   };
 }
 
@@ -536,6 +760,12 @@ function asOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function asOptionalStringOrNumber(value: unknown): string | number | undefined {
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return undefined;
+}
+
 function asOptionalKind(value: unknown):
   | 'request'
   | 'tool_call'
@@ -548,6 +778,60 @@ function asOptionalKind(value: unknown):
     value === 'output_filter'
     ? value
     : undefined;
+}
+
+function normalizeSessionStoreKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeAgentId(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed.replace(/[^a-z0-9._-]+/g, '-') : 'main';
+}
+
+function normalizeIdentitySegment(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return undefined;
+  }
+  const normalized = String(value).normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!normalized) {
+    return undefined;
+  }
+  return encodeURIComponent(normalized);
+}
+
+function stripProviderPrefix(
+  value: string | undefined,
+  provider: string,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const prefix = `${decodeURIComponent(provider)}:`;
+  return value.toLowerCase().startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function extractOpenClawCommand(
+  prompt: string,
+): { command: string; args?: string } | null {
+  const stripped = prompt
+    .normalize('NFKC')
+    .replace(/^\s*(?:\[[^\]\n]{1,160}\]\s*)+/, '')
+    .trimStart();
+  if (!stripped.startsWith('/')) {
+    return null;
+  }
+  const firstLine = stripped.split('\n', 1)[0]?.trim();
+  if (!firstLine) {
+    return null;
+  }
+  const spaceIndex = firstLine.indexOf(' ');
+  if (spaceIndex === -1) {
+    return { command: firstLine };
+  }
+  const command = firstLine.slice(0, spaceIndex).trim();
+  const args = firstLine.slice(spaceIndex + 1).trim();
+  return command ? { command, args: args || undefined } : null;
 }
 
 const plugin = {
